@@ -22,9 +22,9 @@
     # We're using HTTPS to retrieve the package, so this should be safe anyway.
     disable_gpg_check: true
 
-- name: Install the latest version of Apache HTTPD and snapd, using dnf
+- name: Install the latest version of Apache HTTPD, snapd, podman, using dnf
   dnf:
-    name: ['httpd', 'mod_ssl', 'snapd']
+    name: ['httpd', 'mod_ssl', 'snapd', 'podman']
     state: latest
 
 - name: Enable snapd's socket
@@ -93,6 +93,9 @@
 - name: Add custom HTTPD configuration (blog.hibernate.org)
   copy: src=etc/httpd/blog.hibernate.org.conf dest=/etc/httpd/conf.d/blog.hibernate.org.conf mode=0600 owner=root
 
+- name: Add custom HTTPD configuration (infra.hibernate.org)
+  copy: src=etc/httpd/infra.hibernate.org.conf dest=/etc/httpd/conf.d/infra.hibernate.org.conf mode=0600 owner=root
+
 - name: Install the latest version of Let's Encrypt's "certbot", using snapd
   community.general.snap:
     name: certbot
@@ -122,12 +125,58 @@
   args:
     creates: /etc/letsencrypt/live/blog.hibernate.org
 
+- name: Obtain certificates for infra.hibernate.org using Let's Encrypt
+  shell: sudo certbot certonly --apache -d infra.hibernate.org
+  args:
+    creates: /etc/letsencrypt/live/infra.hibernate.org
+
 - name: Ensure Let's encrypt certificates get renewed
   cron:
     name: "Renew let's encrypt certificates"
     minute: "0"
     hour: "0,12"
     job: "python -c 'import random; import time; time.sleep(random.random() * 3600)' && certbot renew"
+
+# This file contains sensitive secrets, so it must be created manually on the target host.
+# It must define:
+# QUARKUS_GITHUB_APP_APP_ID
+# QUARKUS_GITHUB_APP_APP_NAME
+# QUARKUS_GITHUB_APP_WEBHOOK_SECRET
+# QUARKUS_GITHUB_APP_PRIVATE_KEY
+# See https://quarkiverse.github.io/quarkiverse-docs/quarkus-github-app/dev/create-github-app.html#_initialize_the_configuration
+- name: Check if hibernate-github-bot env file exists
+  stat:
+    path: /etc/hibernate-github-bot/env
+  register: hibernate-github-bot-env
+- name: Fail if hibernate-github-bot env file does not exist
+  fail:
+    msg: Create file /etc/hibernate-github-bot/env first.
+  when: not hibernate-github-bot-env.stat.exists
+
+- name: Create the GitHub bot pod
+  containers.podman.podman_pod:
+    name: hibernate-github-bot
+    state: created
+- name: Start the hibernate-github-bot container
+  containers.podman.podman_container:
+    name: hibernate-github-bot
+    pod: hibernate-github-bot
+    image: quay.io/hibernate/hibernate-github-bot:latest
+    recreate: yes
+    state: present
+    env_file: /etc/hibernate-github-bot/env
+    expose:
+      - 8080
+
+- name: Copy hibernate-github-bot service file
+  copy:
+    src: etc/systemd/system/hibernate-github-bot.service
+    dest: /etc/systemd/system
+    owner: root
+    group: root
+
+- name: Ensure hibernate-github-bot is started now, and again on startup
+  service: name=hibernate-github-bot enabled=yes state=restarted
 
 - name: Ensure Apache HTTPD is started now, and again on startup
   service: name=httpd enabled=yes state=restarted

@@ -1,0 +1,11 @@
+[Unit]
+Description=Hibernate GitHub Bot
+Wants=syslog.service
+
+[Service]
+Restart=always
+ExecStart=/usr/bin/podman start -a hibernate-github-bot
+ExecStop=/usr/bin/podman stop -t 2 hibernate-github-bot
+
+[Install]
+WantedBy=multi-user.target
